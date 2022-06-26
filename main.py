@@ -2,7 +2,8 @@ import os
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from fuelPlanner import FuelPlanner, GUI
+from fuelPlanner import FuelPlanner
+from GUI import GUI
 from threading import Thread
 
 class Handler(FileSystemEventHandler):
@@ -18,6 +19,9 @@ class Handler(FileSystemEventHandler):
             self.fuelPlanner.readKmz()
 
 def observerTask():
+    #Wait for the GUI to start
+    time.sleep(1)
+    
     path = os.path.expanduser("~\\Documents\\CombatFlite")
     # Initialize logging event handler
     event_handler = Handler(path)
@@ -35,7 +39,6 @@ def observerTask():
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
-
 
 if __name__ == "__main__":
     Thread(target=observerTask, daemon=True).start()

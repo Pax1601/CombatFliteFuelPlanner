@@ -2,25 +2,16 @@ from zipfile import ZipFile
 import os
 import xml.sax, xml.sax.handler
 import hashlib
-from kivymd.app import MDApp
-from kivymd.uix.floatlayout import MDFloatLayout
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.button import MDRaisedButton
-from kivymd.uix.textfield import MDTextFieldRect
-from kivy.clock import Clock
-from kivy.uix.label import Label
-from kivy.uix.image import Image
-import libs.garden.graph
-import re
+
 import geopy.distance
 import shutil
 import xml.etree.ElementTree as ET
-from kivy.core.window import Window
 import json
 import time
-from dataTable import DataTable
-from kivy.config import Config
+from kivymd.app import MDApp
+from kivy.clock import Clock
 
+from placemarkHandler import PlacemarkHandler
 from hornetDragIndexData import dragIndexesTable, inboardStores1, inboardStores2, outboardStores1, outboardStores2, fuselageStores1, fuselageStores2
 
 plane = "FA-18C"
@@ -29,330 +20,85 @@ f = open(fileName)
 fuelData = json.load(f)
 f.close()
 
-headers = ['WP', 'Distance', 'Mach', 'Altitude', 'Bingo', 'Req.', 'Avail.']
-
-class GUI(MDApp):
-    def update(self, flights, missionData, fuels):
-        if len(flights) == 0: return
-        if self.flightButton.text == "Waiting for flights...":
-            self.flightButton.text = "Select"
-
-        self.flightMenu.items = [{"text": item, "viewclass": "OneLineListItem", "on_release": lambda x = item, flights = flights, missionData = missionData, fuels = fuels: self.selectFlight(x, flights, missionData, fuels)} for item in list(flights.keys()) if item in missionData]
-
-        if self.activeFlightName is None or self.activeFlightName not in flights: return
-        activeFlight = flights[self.activeFlightName]
-        if len(activeFlight) == 0 or not activeFlight[0] or len(fuels['Bingo']) == 0: return
-
-        for row in activeFlight:
-            for key in row:
-                row[key] = f"[color=#000000]{row[key]}[/color]" 
-
-        for i, row in enumerate(activeFlight):
-            row['WP'] = f"[color=#000000][b]{str(i)}[/b][/color]" 
-            row['Bingo'] = f"[color=#000000][b]{fuels['Bingo'][i]:0.1f}k[/b][/color]"
-            row['Req.'] = f"[color=#AA0000][b]{fuels['Required'][i]:0.1f}k[/b][/color]"
-            if (fuels['Available'][i] >= fuels['Required'][i]):
-                row['Avail.'] = f"[color=#00AA00][b]{fuels['Available'][i]:0.1f}k[/b][/color]"
-            else:
-                row['Avail.'] = f"[color=#00AA00][s][b]{fuels['Available'][i]:0.1f}k[/b][/s][/color]"
-            
-        self.table.rows = [[f"{row[key]}" for key in headers] for row in activeFlight]
-
-        if self.bingoPlot is not None:
-            self.graph.remove_plot(self.bingoPlot)
-        self.bingoPlot = libs.garden.graph.SmoothLinePlot(color = [0, 0, 0, 1])
-        self.bingoPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Bingo'])]
-        self.graph.add_plot(self.bingoPlot)
-
-        if self.availablePlot is not None:
-            self.graph.remove_plot(self.availablePlot)
-        self.availablePlot = libs.garden.graph.SmoothLinePlot(color = [0, 0.7, 0, 1])
-        self.availablePlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Available'])]
-        self.graph.add_plot(self.availablePlot)
-
-        if self.requiredPlot is not None:
-            self.graph.remove_plot(self.requiredPlot)
-        self.requiredPlot = libs.garden.graph.SmoothLinePlot(color = [0.7, 0, 0, 1])
-        self.requiredPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Required'])]
-        self.graph.add_plot(self.requiredPlot)
-
-        self.graph.xmax = len(fuels['Bingo'])-1
-
-        for acLabel in self.acLabels:
-            self.rootLayout.remove_widget(acLabel)
-
-        self.acLabels.clear()
-
-        for station in range(1, 10):
-            if str(station) in missionData[self.activeFlightName]['Stores']:
-                store = missionData[self.activeFlightName]['Stores'][str(station)]
-            else:
-                store = 'empty'
-            self.acLabels.append(Label(text = f"{station}: {store}", 
-                            size_hint = (None, None),
-                            size = (500, 20),
-                            pos_hint = {'x': 0.04, 'top': 0.75 - (station - 1) * 20 / self.rootLayout.height},
-                            color = [0, 0, 0, 1],
-                            font_size = 14, 
-                            halign = 'left'))
-
-        self.acLabels.append(Label(text = f"Total fuel: {fuels['Available'][0]:.1f}k lbs", 
-                            size_hint = (None, None),
-                            size = (300, 20),
-                            pos_hint = {'x': 0.04, 'y': 0.495},
-                            color = [0, 0, 0, 1],
-                            font_size = 14, 
-                        halign = 'left',
-                        bold = True))
-        
-        self.acLabels.append(Label(text = f"Total weight: {missionData[self.activeFlightName]['Weight'] * 1000:.0f} lbs", 
-                             size_hint = (None, None),
-                             size = (300, 20),
-                             pos_hint = {'x': 0.25, 'y': 0.495},
-                             color = [0, 0, 0, 1],
-                             font_size = 14, 
-                             halign = 'left',
-                             bold = True))
-
-        if 'DragIndex' in missionData[self.activeFlightName]:
-            self.acLabels.append(Label(text = f"Base drag index: {missionData[self.activeFlightName]['DragIndex']:.0f}", 
-                                size_hint = (None, None),
-                                size = (300, 20),
-                                pos_hint = {'x': 0.04, 'y': 0.465},
-                                color = [0, 0, 0, 1],
-                                font_size = 14, 
-                                halign = 'left',
-                                bold = True))
-
-        for acLabel in self.acLabels:
-            acLabel.text_size = acLabel.size
-            self.rootLayout.add_widget(acLabel)
-
-    def sizeUpdate(self, *args):
-        pass
-        #for graphLabel in self.graphLabels:
-        #    self.rootLayout.remove_widget(graphLabel)
-#
-        #self.graphLabels.clear()
-#
-        #self.graphLabels.append(Label(text = "Bingo",     x = self.rootLayout.width * 0.97 - 85, y = self.graph.top - 40,   halign = 'right', color = [0, 0, 0, 1] , size_hint = (None, None), size = (80, 20)))
-        #self.graphLabels.append(Label(text = "Available", x = self.graphLabels[-1].x, y = self.graphLabels[-1].y - 20,      halign = 'right', color = [0, 0.7, 0, 1], size_hint = (None, None), size = (80, 20)))
-        #self.graphLabels.append(Label(text = "Required",  x = self.graphLabels[-1].x, y = self.graphLabels[-1].y - 20,      halign = 'right', color = [0.7, 0, 0, 1], size_hint = (None, None), size = (80, 20)))
-        #
-        #for graphLabel in self.graphLabels:
-        #    graphLabel.text_size = graphLabel.size
-        #    self.rootLayout.add_widget(graphLabel)
-        
-    def build(self):
-        Window.size = (750, 800)
-        self.icon = 'icon/icon.ico'
-        self.rootLayout = MDFloatLayout()
-
-        self.flightMenu = MDDropdownMenu(width_mult=4)
-        self.rootLayout.add_widget(Label( text = "Selected flight: ", 
-                                            size_hint = (0.15, 0.04),
-                                            pos_hint = {'x': 0.02, 'top': 0.98},
-                                            font_size = 14,
-                                            color = [0, 0, 0, 1]))
-        self.flightButton = MDRaisedButton(text = "Waiting for flights...", 
-                            on_release = lambda *args: self.flightMenu.open(),
-                            size_hint = (0.2, 0.04),
-                            pos_hint = {'x': 0.2, 'top': 0.98})
-        self.flightMenu.caller = self.flightButton
-        self.rootLayout.add_widget(self.flightButton)
-        self.activeFlightName = None
-
-        self.rootLayout.add_widget(Label( text = "Stack reserve [k lbs]: ", 
-                                            size_hint = (0.15, 0.04),
-                                            pos_hint = {'x': 0.51, 'top': 0.98},
-                                            font_size = 14,
-                                            color = [0, 0, 0, 1]))
-        self.reserveTextField = MDTextFieldRect(text = "5.5",
-                                                size_hint = (0.15, 0.04),
-                                                pos_hint = {'x': 0.7, 'top': 0.98},
-                                                font_size = 14,
-                                                multiline = False)
-        self.reserveTextField.bind(on_text_validate = lambda *args: self.planner.readKmz(True))
-        self.rootLayout.add_widget(self.reserveTextField)
-    
-        self.table = DataTable(
-            pos_hint = {'x': 0.5, 'top': 0.92}, 
-            size_hint = (0.48, 0.46),
-            header = headers
-        )
-        self.rootLayout.add_widget(self.table)
-
-        img = Image(source='hornet.png',
-                    pos_hint = {'x': 0.02, 'y': 0.725}, 
-                    size_hint = (0.46, 0.2))
-        self.rootLayout.add_widget(img)
-
-        self.graph = libs.garden.graph.Graph(
-            xlabel = "Waypoint #",
-            ylabel = "Fuel [lbs x 1000]",
-            pos_hint = {'x': 0.0125, 'y': 0.0}, 
-            size_hint = (0.97, 0.43),
-            label_options = {'color': [0, 0, 0, 1]},
-            border_color =  [0, 0, 0, 1], 
-            tick_color =    [0.5, 0.5, 0.5, 1], 
-            y_grid_label=True, 
-            x_grid_label=True,
-            xmin = 0,
-            xmax = 4,
-            ymin = 0,
-            ymax = 20,
-            x_ticks_major = 1,
-            y_ticks_major = 5,
-            y_ticks_minor = 1,
-            x_grid = True,
-            y_grid = True
-        )
-        self.bingoPlot = None    
-        self.availablePlot = None    
-        self.requiredPlot = None    
-        self.rootLayout.add_widget(self.graph)
-
-        self.acLabels = []
-        self.graphLabels = []
-
-        self.rootLayout.bind(size = self.sizeUpdate, pos = self.sizeUpdate)
-        self.graph.bind(size = self.sizeUpdate, pos = self.sizeUpdate)
-        Clock.schedule_once(self.sizeUpdate, 0)
-        return self.rootLayout
-
-    def selectFlight(self, x, flights, missionData, fuels):
-        setattr(self, "activeFlightName", x)
-        if hasattr(self, "planner"):
-            Clock.schedule_once(lambda dt: self.planner.readKmz(True), 0)
-        #Clock.schedule_once(lambda dt, flights = flights, missionData = missionData, fuels = fuels: MDApp.get_running_app().update(flights, missionData, fuels), 0)
-        self.flightMenu.dismiss()
-        self.flightButton.text = x
-
-    def setUpdateTime(self, updateTime):
-        if updateTime:
-            if time is None:
-                self.title = "767 Squadron F/A-18 Hornet Fuel Planner: Mission file never updated"
-            else:
-                self.title = f"767 Squadron F/A-18 Hornet Fuel Planner: Mission file updated {(time.time() - updateTime):0.0f} seconds ago"
-
-    def setPlanner(self, planner):
-        self.planner = planner
-
-class PlacemarkHandler(xml.sax.handler.ContentHandler):
-    def __init__(self):
-        self.inName = False # handle XML parser events
-        self.inPlacemark = False
-        self.mapping = {}
-        self.buffer = ""
-        self.name_tag = ""
-       
-    def startElement(self, name, attributes):
-        if name == "Placemark": # on start Placemark tag
-            self.inPlacemark = True
-            self.buffer = ""
-        if self.inPlacemark:
-            if name == "name": # on start title tag
-                self.inName = True # save name text to follow
-           
-    def characters(self, data):
-        if self.inPlacemark: # on text within tag
-            self.buffer += data # save text if in title
-           
-    def endElement(self, name):
-        self.buffer = self.buffer.strip('\n\t')
-       
-        if name == "Placemark":
-            self.inPlacemark = False
-            self.name_tag = "" #clear current name
-       
-        elif name == "name" and self.inPlacemark:
-            self.inName = False # on end title tag           
-            self.name_tag = self.buffer.strip()
-            
-            if self.name_tag in self.mapping:
-                pattern = re.compile(f"^({self.name_tag}_[0-9]+)+$")
-                reps = [name for name in self.mapping if pattern.match(name)]
-                self.name_tag = f"{self.name_tag}_{len(reps) + 1}"
-            self.mapping[self.name_tag] = {}
-        elif self.inPlacemark:
-            if name in self.mapping[self.name_tag]:
-                self.mapping[self.name_tag][name] += self.buffer
-            else:
-                self.mapping[self.name_tag][name] = self.buffer
-        self.buffer = ""
-
 class FuelPlanner():
     def __init__(self, path) -> None:
-        self.path = path
-        self.kmzHash = None
-        self.cfHash = None
-        self.lastUpdateTime = None
-        Clock.schedule_interval(self.updateTime, 1.0)
+        self._path = path
+        self._kmzHash = None
+        self._cfHash = None
+        self._lastUpdateTime = None
+        self._kmzFilename = os.path.join(self._path, "CombatFlite.kmz")
+        self._cfFilename = os.path.join(self._path, "Autosave.cf")
+        self._tmpName = self._cfFilename[:-3] + "_tmp.cf"
+        self._writeName = self._cfFilename[:-3] + "_fuel.cf"
+        Clock.schedule_interval(self._updateTime, 1.0)
         
-    def updateTime(self, dt):
-        MDApp.get_running_app().setUpdateTime(self.lastUpdateTime)
-
-    def readKmz(self, force = False): 
-        if (MDApp.get_running_app()):
-            MDApp.get_running_app().setPlanner(self)
+    def readKmz(self, force = False):
+        app = MDApp.get_running_app() 
+        if app and app.initialized:
+            app.setPlanner(self)
             read = False
             while not read:
                 try:
-                    kmzFilename = os.path.join(self.path, "CombatFlite.kmz")
-                    cfFilename = os.path.join(self.path, "Autosave.cf")
-                    kmzHash = hashlib.md5(open(kmzFilename, 'rb').read()).hexdigest()
-                    cfHash = hashlib.md5(open(cfFilename, 'rb').read()).hexdigest()
+                    kmzHash = hashlib.md5(open(self._kmzFilename, 'rb').read()).hexdigest()
+                    cfHash = hashlib.md5(open(self._cfFilename, 'rb').read()).hexdigest()
 
-                    missionFileChanged = False
-                    if cfHash != self.cfHash:
-                        self.cfHash = cfHash
-                        self.lastUpdateTime = time.time()
-                        missionFileChanged = True
+                    # The mission file has changed. Update the time of last load
+                    if cfHash != self._cfHash:
+                        self._lastUpdateTime = time.time()
 
-                    if missionFileChanged or kmzHash != self.kmzHash or force:
-                        self.kmzHash = kmzHash
+                    # Run the fuel analysis
+                    if cfHash != self._cfHash or kmzHash != self._kmzHash or force:
+                        self._kmzHash = kmzHash
+                        self._cfHash = cfHash
 
-                        kmz = ZipFile(kmzFilename, 'r')
+                        # Read the kmz file and extract the available flights
+                        kmz = ZipFile(self._kmzFilename, 'r')
                         kml = kmz.open('doc.kml', 'r')
-                        self.parser = xml.sax.make_parser()
-                        self.handler = PlacemarkHandler()
-                        self.parser.setContentHandler(self.handler)
-                        self.parser.parse(kml)
+                        self._parser = xml.sax.make_parser()
+                        self._handler = PlacemarkHandler()
+                        self._parser.setContentHandler(self._handler)
+                        self._parser.parse(kml)
                         kmz.close()
-                        flights = self._parseKml()
+                        self._waypoints = self._parseKml()
 
-                        tmpName = cfFilename[:-3] + "_tmp.cf"
-                        writeName = cfFilename[:-3] + "_fuel.cf"
-                        shutil.copyfile(cfFilename, tmpName)
-                        cf = ZipFile(tmpName, 'r')
+                        # Read the cf file and extract the mission data
+                        shutil.copyfile(self._cfFilename, self._tmpName)
+                        cf = ZipFile(self._tmpName, 'r')
                         missionFile = cf.open('mission.xml', 'r')
                         fileString = missionFile.read().decode('utf-8')
-                        self.root = ET.fromstring(fileString)
-                        missionData = self._parseMission()
+                        self._root = ET.fromstring(fileString)
+                        self._missionData = self._parseMission()
                         cf.close()
 
-                        app = MDApp.get_running_app()
-                        if hasattr(app, 'activeFlightName') and app.activeFlightName and app.activeFlightName in missionData \
-                           and app.activeFlightName in flights and len(flights[app.activeFlightName]) > 0 and len(flights[app.activeFlightName][0]) > 0:
-                            fuels, baseDragIndex = self._computeFuel(flights[app.activeFlightName], missionData[app.activeFlightName])
-                            missionData[app.activeFlightName]['DragIndex'] = baseDragIndex
-                            self._editMission(app.activeFlightName, fuels, flights[app.activeFlightName])
-                            xmlstr = ET.tostring(self.root , encoding='utf-8', method='xml')
-                            cf = ZipFile(writeName, 'w')
-                            writeFile = cf.open('mission.xml', 'w')
-                            writeFile.write(xmlstr)
-                            writeFile.close()
-                        else:
-                            fuels = {'Bingo': [], 'Used': [], 'Available': [], 'Required': []}
-                            missionFile.close()
-                        cf.close()
-                        Clock.schedule_once(lambda dt, flights = flights, missionData = missionData, fuels = fuels: MDApp.get_running_app().update(flights, missionData, fuels), 0)
-                    read = True
+                        # Set the available flights on the GUI
+                        app.flightSelectionTab.flights = list(self._missionData.keys())
+                        read = True
+                        
                 except (FileNotFoundError, PermissionError) as e:
                     read = False
-        
+
+    def _analyzeFlights(self):
+        cf = ZipFile(self._writeName, 'w')
+        for flight in self._missionData.keys():
+            fuels, baseDragIndex = self._computeFuel(self._waypoints[flight], self._missionData[flight])
+            self._missionData[flight]['DragIndex'] = baseDragIndex
+            #self._editMission(app.activeFlightName, fuels, self._waypoints[app.activeFlightName])
+            #xmlstr = ET.tostring(self._root , encoding='utf-8', method='xml')
+            #cf = ZipFile(writeName, 'w')
+            #writeFile = cf.open('mission.xml', 'w')
+            #writeFile.write(xmlstr)
+            #writeFile.close()
+        else:
+            fuels = {'Bingo': [], 'Used': [], 'Available': [], 'Required': []}
+            cf.close()
+            #Clock.schedule_once(lambda dt, flights = flights, missionData = missionData, fuels = fuels: MDApp.get_running_app().update(flights, missionData, fuels), 0)
+        read = True
+    
+    def _updateTime(self, dt):
+        MDApp.get_running_app().setUpdateTime(self._lastUpdateTime)
+
     def _parseKml(self ):
-        mapping = self.handler.mapping
+        mapping = self._handler.mapping
         dataTable = []
         flights = {}
         for key, element in mapping.items():
@@ -385,7 +131,7 @@ class FuelPlanner():
 
     def _parseMission(self):
         missionData = {}
-        for child in self.root:
+        for child in self._root:
             if child.tag == 'Routes':
                 for route in child:
                     name = route.find("Name").text
@@ -400,7 +146,7 @@ class FuelPlanner():
 
     def _editMission(self, flightName, fuels, activeFlight):
         coordinates = [(row['Latitude'], row['Longitude']) for row in activeFlight]
-        for child in self.root:
+        for child in self._root:
             if child.tag == 'Routes':
                 for route in child:
                     name = route.find("Name").text
@@ -410,7 +156,7 @@ class FuelPlanner():
                             lat = waypoint.find('Lat')
                             lon = waypoint.find('Lon')
                             if idx < len(fuels['Bingo']):
-                                name.text = f"{name.text.split(' BINGO: ')[0]} BINGO: {fuels['Bingo'][idx]:.2f}"
+                                name.text = f"{name.text.split(' BINGO: ')[0]} BINGO: {fuels['Bingo'][idx]:.2f} AVAIL: {fuels['Available'][idx]:.2f}"
                                 lat.text = coordinates[idx][0]
                                 lon.text = coordinates[idx][1]
                 
@@ -418,7 +164,8 @@ class FuelPlanner():
         coordinates = [(float(row['Latitude']), float(row['Longitude'])) for row in activeFlight if row]
         home = coordinates[-1]
         distances = [geopy.distance.geodesic(coordinate, home).nm for coordinate in coordinates]
-        legFuels = [(distance * 10) / 1000 for distance in distances]
+                                # Specific fuel consumption on the deck clean
+        legFuels = [(distance / 0.065) / 1000 for distance in distances]
 
         weight = missionData['Weight'] 
 
