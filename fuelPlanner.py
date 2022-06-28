@@ -59,7 +59,7 @@ class FuelPlanner():
                         self._parser.setContentHandler(self._handler)
                         self._parser.parse(kml)
                         kmz.close()
-                        self._waypoints = self._parseKml()
+                        waypoints = self._parseKml()
 
                         # Read the cf file and extract the mission data
                         shutil.copyfile(self._cfFilename, self._tmpName)
@@ -70,9 +70,13 @@ class FuelPlanner():
                         self._missionData = self._parseMission()
                         cf.close()
 
-                        # Set the available flights on the GUI
-                        app.flightSelectionScreen.flights = list(self._missionData.keys())
+                        for flight in self._missionData:
+                            if flight in waypoints:
+                                self._missionData[flight]['Waypoints'] = waypoints[flight]
 
+                        # Set the available flights on the GUI
+                        app.flightSelectionScreen.flights   = self._missionData
+                        
                         # Compute the fuel
                         Clock.schedule_once(lambda *args: self._analyzeFlights(), 0.1)
 
@@ -97,6 +101,12 @@ class FuelPlanner():
             if fuels is not None and baseDragIndex is not None:
                 self._missionData[flight]['DragIndex'] = baseDragIndex
                 self._missionData[flight]['Fuels'] = fuels  
+
+        app = App.get_running_app() 
+        if app and app.initialized:
+            app.loadoutScreen.flights           = self._missionData
+            app.waypointsScreen.flights         = self._missionData
+            app.fuelProfileScreen.flights       = self._missionData
 
     def _updateTime(self, dt):
         App.get_running_app().setUpdateTime(self._lastUpdateTime)
@@ -149,9 +159,9 @@ class FuelPlanner():
         return missionData
 
     def _editMission(self, flight):
-        if flight in self._missionData and 'Fuels' in self._missionData[flight] and flight in self._waypoints:
+        if flight in self._missionData and 'Fuels' in self._missionData[flight]:
             fuels = self._missionData[flight]['Fuels']
-            waypoints = self._waypoints[flight]
+            waypoints = self._missionData[flight]['Waypoints']
             coordinates = [(row['Latitude'], row['Longitude']) for row in waypoints]
             for child in self._root:
                 if child.tag == 'Routes':
@@ -169,8 +179,8 @@ class FuelPlanner():
                 
     def _computeFuel(self, flight):
         app = App.get_running_app() 
-        if flight in self._waypoints:
-            waypoints = self._waypoints[flight]
+        if flight in self._missionData:
+            waypoints = self._missionData[flight]['Waypoints']
             missionData = self._missionData[flight]
 
             coordinates = [(float(row['Latitude']), float(row['Longitude'])) for row in waypoints if row]
