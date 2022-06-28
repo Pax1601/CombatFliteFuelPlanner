@@ -33,7 +33,7 @@ class TableLabel(Label):
 class DataTable(ScrollView):
     header = ListProperty([])
     rows = ListProperty([]) 
-    row_height = NumericProperty(18)
+    row_height = NumericProperty(30)
     def __init__(self, **kwargs):        
         super().__init__(**kwargs)
         with self.canvas.before:
@@ -71,14 +71,40 @@ class DataTable(ScrollView):
         self.line.points= [x, y, x, top, right, top, right, y, x, y]
 
     def setHeader(self):
+        self._headerElements = []
         for el in self.header:
-            label = TableLabel(text = el, color = [0, 0, 0, 1], font_size = 12, bold = True,  background_color = [0.9, 0.9, 0.9, 1.0] )
+            if isinstance(el, tuple):
+                label = TableLabel( text = el[0], 
+                                    color = [1.0, 1.0, 1.0, 1.0], 
+                                    font_size = 14,  
+                                    background_color = [0.2, 0.2, 0.2, 1.0], 
+                                    size_hint_x = None, 
+                                    width = el[1] )
+            else:
+                label = TableLabel( text = el, 
+                                    color = [1.0, 1.0, 1.0, 1.0], 
+                                    font_size = 14,  
+                                    background_color = [0.2, 0.2, 0.2, 1.0] )
+            self._headerElements.append(label)
             self.content.add_widget(label)
 
     def setContent(self):
         for i, row in enumerate(self.rows):
-            for el in row:
-                label = TableLabel(text = el, font_size = 12, markup = True, background_color = [0.93, 0.93, 0.93, 1.0] if i % 2 else [1.0, 1.0, 1.0, 1.0])
-                self.content.add_widget(label)
+            for col, el in enumerate(row):
+                if isinstance(el, str):
+                    label = TableLabel( text = el, 
+                                        color = [0.0, 0.0, 0.0, 1.0], 
+                                        font_size = 14, 
+                                        markup = True, 
+                                        background_color = [0.93, 0.93, 0.93, 1.0] if i % 2 else [1.0, 1.0, 1.0, 1.0])
+                    if isinstance(self.header[col], tuple):
+                        label.size_hint_x = None
+                        label.width = self.header[col][1]
+                    self.content.add_widget(label)
+                else:
+                    if isinstance(self.header[col], tuple):
+                        el.size_hint_x = None
+                        el.width = self.header[col][1]
+                    self.content.add_widget(el)
 
     

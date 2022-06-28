@@ -1,59 +1,41 @@
-from kivymd.app import MDApp
-from kivymd.uix.floatlayout import MDFloatLayout
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.button import MDRaisedButton
-from kivymd.uix.textfield import MDTextFieldRect
 from kivy.clock import Clock
+from kivy.app import App
 from kivy.uix.label import Label
+from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.image import Image
-import libs.garden.graph
-from dataTable import DataTable
 from kivy.core.window import Window
-import time
+from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
+from kivy.uix.actionbar import ActionBar, ActionView, ActionButton, ActionPrevious
+from kivy.graphics import Color, Rectangle
+from kivy.uix.textinput import TextInput
+from kivy.uix.checkbox import CheckBox
+
 from kivy.lang import Builder
 from kivy.uix.floatlayout import FloatLayout
-
-from kivymd.app import MDApp
-from kivymd.uix.tab import MDTabsBase
-from kivymd.uix.datatables import MDDataTable
 from kivy.metrics import dp
 
-headers = ['WP', 'Distance', 'Mach', 'Altitude', 'Bingo', 'Req.', 'Avail.']
+import libs.garden.graph
 
-KV = '''
-BoxLayout:
-    orientation: "vertical"
+from dataTable import DataTable
+import time
 
-    MDTabs:
-        id: content_tabs
-        on_tab_switch: app.on_tab_switch(*args)
-'''
+background_color = Color([0.95, 0.95, 0.95, 1.0])
+text_color = [0.1, 0.1, 0.1, 1.0]
 
-class FlightSelectionTab(FloatLayout, MDTabsBase):
+waypointsHeader = ['WP', 'Distance', 'Mach', 'Altitude', 'Bingo', 'Req.', 'Avail.']
+flightsHeader = [('Compute', 70), 'Flight name', 'Aircraft', 'Takeoff res. [k lbs]', 'Stack res. [k lbs]']
+
+class FlightSelectionScreen(Screen):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self._flights = {}
-        self._flightsTable = MDDataTable(
-            use_pagination=False,
-            check=True,
-            column_data=[
-                ("[size=14]Flight name[/size]", dp(60),),
-                ("[size=14]Aircraft[/size]", dp(60)),
-                ("[size=14]Members[/size]", dp(30))
-            ],
-            elevation=2,
+        self._selectedFlight = None
+        super().__init__(**kwargs)
+        self._table = DataTable(
+            pos_hint = {'x': 0.02, 'top': 0.98}, 
             size_hint = (0.96, 0.96),
-            pos_hint = {'x': 0.02, 'top': 0.98}
+            header = flightsHeader
         )
-        self._flightsTable.bind(on_row_press=self.on_row_press)
-        self._flightsTable.bind(on_check_press=self.on_check_press)
-        self.add_widget(self._flightsTable)
-
-    def on_row_press(self, instance_table, instance_row):
-        print(instance_table, instance_row)
-
-    def on_check_press(self, instance_table, current_row):
-        print(instance_table, current_row)
+        self.add_widget(self._table)
 
     @property
     def flights(self):
@@ -66,16 +48,19 @@ class FlightSelectionTab(FloatLayout, MDTabsBase):
     def _setFlights(self, flights):
         if len(flights) == 0: return
 
-        for flight in flights:
-            if flight not in self._flights:
-                self._flights[flight] = (flight, "", "")
-        
-        self._flightsTable.row_data = [flightData for flightData in self.flights.values()]
-        self._flightsTable.header.height = 25
-        foo = 1
+        if self._selectedFlight not in flights:
+            self._selectedFlight = None
 
+        for flight in flights:
+            if self._selectedFlight is None:
+                self._selectedFlight = flight
+
+            if flight not in self._flights: 
+                self._flights[flight] = (CheckBox(active = True), flight, "N/A", TextInput(text = "5.5"), TextInput(text = "0.8"))
         
-class LoadoutTab(FloatLayout, MDTabsBase):
+        self._table.rows = [flightData for flightData in self.flights.values()]
+        
+class LoadoutScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         img = Image(source='hornet.png',
@@ -83,17 +68,17 @@ class LoadoutTab(FloatLayout, MDTabsBase):
                     size_hint = (0.96, 0.48))
         self.add_widget(img)
 
-class WaypointsTab(FloatLayout, MDTabsBase):
+class WaypointsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.table = DataTable(
+        self._table = DataTable(
             pos_hint = {'x': 0.02, 'top': 0.98}, 
             size_hint = (0.96, 0.96),
-            header = headers
+            header = waypointsHeader
         )
-        self.add_widget(self.table)
+        self.add_widget(self._table)
 
-class FuelProfileTab(FloatLayout, MDTabsBase):
+class FuelProfileScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.graph = libs.garden.graph.Graph(
@@ -121,7 +106,7 @@ class FuelProfileTab(FloatLayout, MDTabsBase):
         self.requiredPlot = None    
         self.add_widget(self.graph)
 
-class GUI(MDApp):
+class GUI(App):
     '''
     def update(self, flights, missionData, fuels):
         if len(flights) == 0: return
@@ -222,55 +207,67 @@ class GUI(MDApp):
     def __init__(self, **kwargs):
         self._initialized = False
         super().__init__(**kwargs)
-
+        Window.size = (600, 400)
+        self.icon = "icon/icon.ico"
+        self.title = "767 Squadron F/A-18 Hornet Fuel Planner: Mission file never updated"
+        
     def build(self):
-        self.icon = 'icon/icon.ico'
-        Window.size = (650, 400)
-        return Builder.load_string(KV)
+        self._rootLayout = BoxLayout(orientation = "vertical")
+
+        self._actionBar = ActionBar()
+        self._actionView = ActionView(orientation = 'horizontal')
+
+        self._actionBar.add_widget(self._actionView)
+
+        self._flightSelectionScreen = FlightSelectionScreen(name="Mission setup")
+        self._loadoutScreen = LoadoutScreen(name="Loadout")
+        self._waypointsScreen = WaypointsScreen(name="Waypoints")
+        self._fuelProfileScreen = FuelProfileScreen(name="Fuel profile")
+
+        self._screenManager = ScreenManager(transition=SlideTransition(duration = .2))
+        self._screenManager.add_widget(self._flightSelectionScreen)
+        self._screenManager.add_widget(self._loadoutScreen)
+        self._screenManager.add_widget(self._waypointsScreen)
+        self._screenManager.add_widget(self._fuelProfileScreen)
+
+        self._actionView.add_widget(ActionPrevious(title = "", app_icon = "icon/icon.ico"))
+        self._actionView.add_widget(ActionButton(text = "Mission setup", on_release = lambda *args: self._setScreen("Mission setup")))
+        self._actionView.add_widget(ActionButton(text = "Loadout", on_release = lambda *args: self._setScreen("Loadout")))
+        self._actionView.add_widget(ActionButton(text = "Waypoints", on_release = lambda *args: self._setScreen("Waypoints")))
+        self._actionView.add_widget(ActionButton(text = "Fuel profile", on_release = lambda *args: self._setScreen("Fuel profile")))
+        self._actionView.add_widget(ActionButton(text = "Export", on_release = lambda *args: self._planner.exportResults()))
+
+        self._rootLayout.add_widget(self._actionBar)
+        self._rootLayout.add_widget(self._screenManager)
+
+        self._rootLayout.canvas.before.add(background_color)
+        self._rectangle = Rectangle()
+        self._rootLayout.canvas.before.add(self._rectangle)
+        self._update()
+        self._rootLayout.bind(size = self._update, pos = self._update)
+        
+        self._initialized = True
+        return self._rootLayout
 
     @property
-    def flightSelectionTab(self):
-        return self._flightSelectionTab
+    def flightSelectionScreen(self):
+        return self._flightSelectionScreen
 
     @property
-    def loadoutTab(self):
-        return self._loadoutTab
+    def loadoutScreen(self):
+        return self._loadoutScreen
 
     @property
-    def waypointsTab(self):
-        return self._waypointsTab
+    def waypointsScreen(self):
+        return self._waypointsScreen
 
     @property
-    def fuelProfileTab(self):
-        return self._fuelProfileTab
+    def fuelProfileScreen(self):
+        return self._fuelProfileScreen
 
     @property
     def initialized(self):
         return self._initialized
-
-    def on_start(self):
-        self._flightSelectionTab = FlightSelectionTab(text="Setup flight")
-        self._loadoutTab = LoadoutTab(text="Loadout")
-        self._waypointsTab = WaypointsTab(text="Waypoints")
-        self._fuelProfileTab = FuelProfileTab(text="Fuel profile")
-
-        self.root.ids.content_tabs.add_widget(self._flightSelectionTab)
-        self.root.ids.content_tabs.add_widget(self._loadoutTab)
-        self.root.ids.content_tabs.add_widget(self._waypointsTab)
-        self.root.ids.content_tabs.add_widget(self._fuelProfileTab)
-        
-        self._initialized = True
-
-    def on_tab_switch(self, *args):
-        pass
-
-    def selectFlight(self, x, flights, missionData, fuels):
-        setattr(self, "activeFlightName", x)
-        if hasattr(self, "planner"):
-            Clock.schedule_once(lambda dt: self.planner.readKmz(True), 0)
-        #Clock.schedule_once(lambda dt, flights = flights, missionData = missionData, fuels = fuels: MDApp.get_running_app().update(flights, missionData, fuels), 0)
-        self.flightMenu.dismiss()
-        self.flightButton.text = x
 
     def setUpdateTime(self, updateTime):
         if updateTime:
@@ -280,4 +277,11 @@ class GUI(MDApp):
                 self.title = f"767 Squadron F/A-18 Hornet Fuel Planner: Mission file updated {(time.time() - updateTime):0.0f} seconds ago"
 
     def setPlanner(self, planner):
-        self.planner = planner
+        self._planner = planner
+
+    def _update(self, *args):
+        self._rectangle.pos = self._rootLayout.pos
+        self._rectangle.size = self._rootLayout.size
+
+    def _setScreen(self, screen):
+        self._screenManager.current = screen

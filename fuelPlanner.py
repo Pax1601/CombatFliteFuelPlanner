@@ -8,7 +8,7 @@ import shutil
 import xml.etree.ElementTree as ET
 import json
 import time
-from kivymd.app import MDApp
+from kivy.app import App
 from kivy.clock import Clock
 
 from placemarkHandler import PlacemarkHandler
@@ -33,7 +33,7 @@ class FuelPlanner():
         Clock.schedule_interval(self._updateTime, 1.0)
         
     def readKmz(self, force = False):
-        app = MDApp.get_running_app() 
+        app = App.get_running_app() 
         if app and app.initialized:
             app.setPlanner(self)
             read = False
@@ -71,31 +71,35 @@ class FuelPlanner():
                         cf.close()
 
                         # Set the available flights on the GUI
-                        app.flightSelectionTab.flights = list(self._missionData.keys())
+                        app.flightSelectionScreen.flights = list(self._missionData.keys())
+
+                        # Compute the fuel
+                        Clock.schedule_once(lambda *args: self._analyzeFlights(), 0.1)
+
                         read = True
                         
                 except (FileNotFoundError, PermissionError) as e:
                     read = False
 
-    def _analyzeFlights(self):
-        cf = ZipFile(self._writeName, 'w')
+    def exportResults(self):
         for flight in self._missionData.keys():
-            fuels, baseDragIndex = self._computeFuel(self._waypoints[flight], self._missionData[flight])
-            self._missionData[flight]['DragIndex'] = baseDragIndex
-            #self._editMission(app.activeFlightName, fuels, self._waypoints[app.activeFlightName])
-            #xmlstr = ET.tostring(self._root , encoding='utf-8', method='xml')
-            #cf = ZipFile(writeName, 'w')
-            #writeFile = cf.open('mission.xml', 'w')
-            #writeFile.write(xmlstr)
-            #writeFile.close()
-        else:
-            fuels = {'Bingo': [], 'Used': [], 'Available': [], 'Required': []}
+            self._editMission(flight)
+            xmlstr = ET.tostring(self._root , encoding='utf-8', method='xml')
+            cf = ZipFile(self._writeName, 'w')
+            writeFile = cf.open('mission.xml', 'w')
+            writeFile.write(xmlstr)
+            writeFile.close()
             cf.close()
-            #Clock.schedule_once(lambda dt, flights = flights, missionData = missionData, fuels = fuels: MDApp.get_running_app().update(flights, missionData, fuels), 0)
-        read = True
-    
+
+    def _analyzeFlights(self):
+        for flight in self._missionData.keys():
+            fuels, baseDragIndex = self._computeFuel(flight)
+            if fuels is not None and baseDragIndex is not None:
+                self._missionData[flight]['DragIndex'] = baseDragIndex
+                self._missionData[flight]['Fuels'] = fuels  
+
     def _updateTime(self, dt):
-        MDApp.get_running_app().setUpdateTime(self._lastUpdateTime)
+        App.get_running_app().setUpdateTime(self._lastUpdateTime)
 
     def _parseKml(self ):
         mapping = self._handler.mapping
@@ -144,88 +148,96 @@ class FuelPlanner():
                     missionData[name] = {'Fuel': fuel * 2.20462 / 1000, 'Stores': stores, 'Weight': weight * 2.20462 / 1000}
         return missionData
 
-    def _editMission(self, flightName, fuels, activeFlight):
-        coordinates = [(row['Latitude'], row['Longitude']) for row in activeFlight]
-        for child in self._root:
-            if child.tag == 'Routes':
-                for route in child:
-                    name = route.find("Name").text
-                    if name == flightName:
-                        for idx, waypoint in enumerate(route.find("Waypoints")):
-                            name = waypoint.find('Name')
-                            lat = waypoint.find('Lat')
-                            lon = waypoint.find('Lon')
-                            if idx < len(fuels['Bingo']):
-                                name.text = f"{name.text.split(' BINGO: ')[0]} BINGO: {fuels['Bingo'][idx]:.2f} AVAIL: {fuels['Available'][idx]:.2f}"
-                                lat.text = coordinates[idx][0]
-                                lon.text = coordinates[idx][1]
+    def _editMission(self, flight):
+        if flight in self._missionData and 'Fuels' in self._missionData[flight] and flight in self._waypoints:
+            fuels = self._missionData[flight]['Fuels']
+            waypoints = self._waypoints[flight]
+            coordinates = [(row['Latitude'], row['Longitude']) for row in waypoints]
+            for child in self._root:
+                if child.tag == 'Routes':
+                    for route in child:
+                        name = route.find("Name").text
+                        if name == flight:
+                            for idx, waypoint in enumerate(route.find("Waypoints")):
+                                name = waypoint.find('Name')
+                                lat = waypoint.find('Lat')
+                                lon = waypoint.find('Lon')
+                                if idx < len(fuels['Bingo']):
+                                    name.text = f"{name.text.split('/B')[0]}/B{fuels['Bingo'][idx]:.1f}-R{fuels['Required'][idx]:.1f}"
+                                    lat.text = coordinates[idx][0]
+                                    lon.text = coordinates[idx][1]
                 
-    def _computeFuel(self, activeFlight, missionData):
-        coordinates = [(float(row['Latitude']), float(row['Longitude'])) for row in activeFlight if row]
-        home = coordinates[-1]
-        distances = [geopy.distance.geodesic(coordinate, home).nm for coordinate in coordinates]
-                                # Specific fuel consumption on the deck clean
-        legFuels = [(distance / 0.065) / 1000 for distance in distances]
+    def _computeFuel(self, flight):
+        app = App.get_running_app() 
+        if flight in self._waypoints:
+            waypoints = self._waypoints[flight]
+            missionData = self._missionData[flight]
 
-        weight = missionData['Weight'] 
+            coordinates = [(float(row['Latitude']), float(row['Longitude'])) for row in waypoints if row]
+            home = coordinates[-1]
+            distances = [geopy.distance.geodesic(coordinate, home).nm for coordinate in coordinates]
+                                    # Specific fuel consumption on the deck clean
+            legFuels = [(distance / 0.065) / 1000 for distance in distances]
 
-        bagsCount = 0
-        for store in missionData['Stores'].values():
-            if "FPU-8A" in store:
-                bagsCount += 1
-        totalFuel = missionData['Fuel'] + bagsCount * 330 * 6.71 / 1000.0
-        try:
-            reserve = float(MDApp.get_running_app().reserveTextField.text)
-            MDApp.get_running_app().reserveTextField.error = False
-        except:
+            weight = missionData['Weight'] 
+
+            bagsCount = 0
+            for store in  missionData['Stores'].values():
+                if "FPU-8A" in store:
+                    bagsCount += 1
+            totalFuel =  missionData['Fuel'] + bagsCount * 330 * 6.71 / 1000.0
+
             reserve = 5.5
-            MDApp.get_running_app().reserveTextField.text = "5.5"
-            MDApp.get_running_app().reserveTextField.error = True
+            try:
+                reserve = float(app.flightSelectionScreen.flights[flight][3].text)
+            except:
+                app.flightSelectionScreen.flights[flight][3].text = "5.5"
 
-        fuels = {}
-        fuels['Used'] = [0]
-        fuels['Available'] = [totalFuel]
-        fuels['Required'] = []
-        fuels['Bingo'] = [] 
-        baseDragIndex = 0
+            fuels = {}
+            fuels['Used'] = [0]
+            fuels['Available'] = [totalFuel]
+            fuels['Required'] = []
+            fuels['Bingo'] = [] 
+            baseDragIndex = 0
 
-        for legFuel in legFuels:
-            fuels['Bingo'].append( legFuel + reserve)
+            for legFuel in legFuels:
+                fuels['Bingo'].append( legFuel + reserve)
 
-        for i in range(len(activeFlight) - 1):
-            startCoordinates = (float(activeFlight[i]['Latitude']), float(activeFlight[i]['Longitude']))
-            endCoordinates = (float(activeFlight[i + 1]['Latitude']), float(activeFlight[i + 1]['Longitude']))
-            legDistance = geopy.distance.geodesic(startCoordinates, endCoordinates).nm
-            altitude = float(activeFlight[i + 1]['Altitude'].replace("ft", "").replace( "AGL", "").strip())
-            mach = float(activeFlight[i + 1]["Mach"])
+            for i in range(len(waypoints) - 1):
+                startCoordinates = (float(waypoints[i]['Latitude']), float(waypoints[i]['Longitude']))
+                endCoordinates = (float(waypoints[i + 1]['Latitude']), float(waypoints[i + 1]['Longitude']))
+                legDistance = geopy.distance.geodesic(startCoordinates, endCoordinates).nm
+                altitude = float(waypoints[i + 1]['Altitude'].replace("ft", "").replace( "AGL", "").strip())
+                mach = float(waypoints[i + 1]["Mach"])
+                
+                baseDragIndex, dragIndex = self._computeDragIndex(missionData, altitude, mach)
             
-            baseDragIndex, dragIndex = self._computeDragIndex(missionData, altitude, mach)
-           
-            # Average initial and final fuel consumption #TODO iteration may be needed
-            SFi = self._interpolateFuelData(altitude, weight * 1000, dragIndex, mach)
-            _weight = weight - legDistance / SFi / 1000
-            SFf = self._interpolateFuelData(altitude, _weight * 1000, dragIndex, mach)
-            SF = (SFi + SFf) / 2
+                # Average initial and final fuel consumption #TODO iteration may be needed
+                SFi = self._interpolateFuelData(altitude, weight * 1000, dragIndex, mach)
+                _weight = weight - legDistance / SFi / 1000
+                SFf = self._interpolateFuelData(altitude, _weight * 1000, dragIndex, mach)
+                SF = (SFi + SFf) / 2
 
-            fuelBurn = legDistance / SF / 1000
-            weight = weight - fuelBurn
-            totalFuel = totalFuel - fuelBurn
-            fuels['Used'].append(fuelBurn)
-            fuels['Available'].append(totalFuel)
-        
-        t = list(fuels['Used'])
-        k = []
-        t.reverse()
-        required = reserve
-        k.append(required)
-        for legRequired in t[:-1]:
-            required += legRequired
+                fuelBurn = legDistance / SF / 1000
+                weight = weight - fuelBurn
+                totalFuel = totalFuel - fuelBurn
+                fuels['Used'].append(fuelBurn)
+                fuels['Available'].append(totalFuel)
+            
+            t = list(fuels['Used'])
+            k = []
+            t.reverse()
+            required = reserve
             k.append(required)
+            for legRequired in t[:-1]:
+                required += legRequired
+                k.append(required)
 
-        k.reverse()
-        fuels['Required'] = k
-            
-        return fuels, baseDragIndex
+            k.reverse()
+            fuels['Required'] = k
+                
+            return fuels, baseDragIndex
+        return None, None
 
     def _computeDragIndex(self, missionData, altitude, mach):
         basicStoreDragIndexs = [0, 0, 0, 0, 0, 0, 0, 0, 0]
