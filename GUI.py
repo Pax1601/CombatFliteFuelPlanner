@@ -13,7 +13,7 @@ from kivy.uix.dropdown import DropDown
 from kivy.uix.button import Button
 
 from kivy.lang import Builder
-from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.gridlayout import GridLayout
 from kivy.metrics import dp
 
 import libs.garden.graph
@@ -25,7 +25,7 @@ background_color = Color([0.95, 0.95, 0.95, 1.0])
 text_color = [0.1, 0.1, 0.1, 1.0]
 
 waypointsHeader = ['WP', 'Distance', 'Mach', 'Altitude', 'Bingo', 'Req.', 'Avail.']
-flightsHeader = [('Compute', 70), 'Flight name', 'Aircraft', 'Takeoff res. [k lbs]', 'Stack res. [k lbs]']
+flightsHeader = [('Export', 70), 'Flight name', 'Aircraft', 'Takeoff res. [k lbs]', 'Stack res. [k lbs]']
 
 class FlightsScreen(Screen): 
         @property
@@ -37,12 +37,15 @@ class FlightsScreen(Screen):
             Clock.schedule_once(lambda dt, flights = flights: self._setFlights(flights))
 
 class FlightSpecificScreen(FlightsScreen):
+    instances = []
     def __init__(self, **kw):
         super().__init__(**kw)
+        self.instances.append(self)
         self._selectedFlight = None
+        self._dropdownButtons = []
         self._flights = {}
         self._flightDropdown = DropDown()
-        self._flightButton = Button(text = 'Select flight', 
+        self._flightButton = Button(text = 'No flights', 
                                     size_hint = (None, None),
                                     size = (150, 30),
                                     pos_hint = {'x': 0.02, 'top': 0.98},
@@ -54,8 +57,12 @@ class FlightSpecificScreen(FlightsScreen):
 
     def _setFlights(self, flights):
         self._flights = flights
-        for child in list(self._flightDropdown.children):
-            self._flightDropdown.remove_widget(child)
+        for btn in self._dropdownButtons:
+            self._flightDropdown.remove_widget(btn)
+        self._dropdownButtons.clear()
+
+        if self._selectedFlight is None and len(self._flights) > 0:
+            self._flightButton.text = "Select flight"
 
         for flight in flights:
             btn = Button(   text = flight, 
@@ -63,10 +70,25 @@ class FlightSpecificScreen(FlightsScreen):
                             size = self._flightButton.size,
                             background_color = [0.2, 0.2, 0.2, 1.0],
                             background_normal = '')
-            btn.bind(on_release=lambda btn: [self._flightDropdown.select(btn.text), self._selectFlight(btn.text)])
+            for instance in self.instances:
+                btn.bind(on_release=lambda btn, instance = instance: instance._selectFlight(btn.text))
             self._flightDropdown.add_widget(btn)
-
+            self._dropdownButtons.append(btn)
+        
+        if self._selectedFlight is not None:
+            if self._selectedFlight in self._flights:
+                self._selectFlight(self._selectedFlight)
+            else:
+                if len(self._flights) > 0:
+                    self._selectFlight(list(self._flights.keys())[0])
+                else:
+                    self._selectFlight(None)
+        
     def _selectFlight(self, flight):
+        if flight is not None:
+            self._flightDropdown.select(flight)
+        else:
+            self._flightDropdown.select("No flights")
         self._selectedFlight = flight
             
 class FlightSelectionScreen(FlightsScreen):
@@ -81,11 +103,13 @@ class FlightSelectionScreen(FlightsScreen):
         self.add_widget(self._table)
 
     def _setFlights(self, flights):
-        if len(flights) == 0: return
-
         for flight in flights:
             if flight not in self._flights: 
                 self._flights[flight] = (CheckBox(active = True), flight, "N/A", TextInput(text = "5.5"), TextInput(text = "0.8"))
+
+        for flight in list(self._flights.keys()):
+            if flight not in flights:
+                del self._flights[flight]
         
         self._table.rows = [flightData for flightData in self.flights.values()]
         
@@ -97,29 +121,69 @@ class LoadoutScreen(FlightSpecificScreen):
                     size_hint = (0.96, 0.48))
         self.add_widget(img)
 
-        self._storesLayout = BoxLayout( orientation ='vertical',
-                                        pos_hint = {'x': 0.02, 'top': 0.48}, 
-                                        size_hint = (0.47, 0.40))
+        self._storesLayout = GridLayout(pos_hint = {'x': 0.02, 'top': 0.58}, 
+                                        size_hint = (0.47, 0.56),
+                                        rows = 10,
+                                        cols = 1)
         self.add_widget(self._storesLayout)
+
+        self._dataLayout = GridLayout(  pos_hint = {'x': 0.52, 'top': 0.58}, 
+                                        size_hint = (0.47, 0.56),
+                                        rows = 10,
+                                        cols = 1)
+        self.add_widget(self._dataLayout)
+
+        self.bind(pos = self._update, size = self._update)
+        self._update()
 
     def _selectFlight(self, flight):
         super()._selectFlight(flight)
-        stores = self._flights[flight]['Stores']
 
         for child in list(self._storesLayout.children):
             self._storesLayout.remove_widget(child)
 
-        for station in range(1, 10):
-            if str(station) in stores:
-                store = stores[str(station)]
-            else:
-                store = 'Empty'
-            label = Label(  text = f"{station}: {store}", 
-                            color = [0, 0, 0, 1],
-                            font_size = 14, 
-                            halign = 'left')
-            label.text_size = label.size
-            self._storesLayout.add_widget(label)
+        for child in list(self._dataLayout.children):
+            self._dataLayout.remove_widget(child)
+
+        if flight is not None:
+            if 'Stores' in self._flights[flight] and 'Fuels' in self._flights[flight]:
+                stores = self._flights[flight]['Stores']
+                fuels = self._flights[flight]['Fuels']
+
+                for station in range(1, 10):
+                    if str(station) in stores:
+                        store = stores[str(station)]
+                    else:
+                        store = 'Empty'
+                    label = Label(  text = f"{station}: {store}", 
+                                    color = [0, 0, 0, 1],
+                                    font_size = 14, 
+                                    halign = 'left')
+                    self._storesLayout.add_widget(label)
+                
+                strings = [ f"Total fuel: {fuels['Available'][0]:.1f}k lbs",
+                            f"Total weight: {self._flights[flight]['Weight'] * 1000:.0f} lbs",
+                            f"Base drag index: {self._flights[flight]['DragIndex']:.0f}"
+                            ]
+                for string in strings:
+                    label = Label(  text = string, 
+                                    color = [0, 0, 0, 1],
+                                    font_size = 14, 
+                                    halign = 'left',
+                                    bold = True)
+                    self._dataLayout.add_widget(label)
+                
+                while len(self._dataLayout.children) < len(self._storesLayout.children):
+                    self._dataLayout.add_widget(Label())
+
+                Clock.schedule_once(self._update, 0)
+
+    def _update(self, *args):
+        for child in self._storesLayout.children:
+            child.text_size = child.size
+        
+        for child in self._dataLayout.children:
+            child.text_size = child.size
 
 class WaypointsScreen(FlightSpecificScreen):
     def __init__(self, **kwargs):
@@ -133,23 +197,26 @@ class WaypointsScreen(FlightSpecificScreen):
 
     def _selectFlight(self, flight):
         super()._selectFlight(flight)
-        fuels = self._flights[flight]['Fuels']
-        waypoints = self._flights[flight]['Waypoints']
-        data = []
+        self._table.rows = []
+        if flight is not None:
+            if 'Fuels' in self._flights[flight]:
+                fuels = self._flights[flight]['Fuels']
+                waypoints = self._flights[flight]['Waypoints']
+                data = []
 
-        for i, row in enumerate(waypoints):
-            data.append({})
-            for key in ['Distance', 'Mach', 'Altitude']:
-                data[i][key] = f"[color=#000000]{row[key]}[/color]" 
-            data[i]['WP'] = f"[color=#000000][b]{str(i)}[/b][/color]" 
-            data[i]['Bingo'] = f"[color=#000000][b]{fuels['Bingo'][i]:0.1f}k[/b][/color]"
-            data[i]['Req.'] = f"[color=#AA0000][b]{fuels['Required'][i]:0.1f}k[/b][/color]"
-            if (fuels['Available'][i] >= fuels['Required'][i]):
-                data[i]['Avail.'] = f"[color=#00AA00][b]{fuels['Available'][i]:0.1f}k[/b][/color]"
-            else:
-                data[i]['Avail.'] = f"[color=#00AA00][s][b]{fuels['Available'][i]:0.1f}k[/b][/s][/color]"
-            
-        self._table.rows = [[f"{row[key]}" for key in waypointsHeader] for row in data]
+                for i, row in enumerate(waypoints):
+                    data.append({})
+                    for key in ['Distance', 'Mach', 'Altitude']:
+                        data[i][key] = f"[color=#000000]{row[key]}[/color]" 
+                    data[i]['WP'] = f"[color=#000000][b]{str(i)}[/b][/color]" 
+                    data[i]['Bingo'] = f"[color=#000000][b]{fuels['Bingo'][i]:0.1f}k[/b][/color]"
+                    data[i]['Req.'] = f"[color=#AA0000][b]{fuels['Required'][i]:0.1f}k[/b][/color]"
+                    if (fuels['Available'][i] >= fuels['Required'][i]):
+                        data[i]['Avail.'] = f"[color=#00AA00][b]{fuels['Available'][i]:0.1f}k[/b][/color]"
+                    else:
+                        data[i]['Avail.'] = f"[color=#00AA00][s][b]{fuels['Available'][i]:0.1f}k[/b][/s][/color]"
+                    
+                self._table.rows = [[f"{row[key]}" for key in waypointsHeader] for row in data]
 
 class FuelProfileScreen(FlightSpecificScreen):
     def __init__(self, **kwargs):
@@ -181,127 +248,33 @@ class FuelProfileScreen(FlightSpecificScreen):
 
     def _selectFlight(self, flight):
         super()._selectFlight(flight)
-        fuels = self._flights[flight]['Fuels']
-        
+
         if self.bingoPlot is not None:
             self.graph.remove_plot(self.bingoPlot)
-        self.bingoPlot = libs.garden.graph.SmoothLinePlot(color = [0, 0, 0, 1])
-        self.bingoPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Bingo'])]
-        self.graph.add_plot(self.bingoPlot)
-
         if self.availablePlot is not None:
             self.graph.remove_plot(self.availablePlot)
-        self.availablePlot = libs.garden.graph.SmoothLinePlot(color = [0, 0.7, 0, 1])
-        self.availablePlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Available'])]
-        self.graph.add_plot(self.availablePlot)
-
         if self.requiredPlot is not None:
-            self.graph.remove_plot(self.requiredPlot)
-        self.requiredPlot = libs.garden.graph.SmoothLinePlot(color = [0.7, 0, 0, 1])
-        self.requiredPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Required'])]
-        self.graph.add_plot(self.requiredPlot)
+                self.graph.remove_plot(self.requiredPlot)
 
-        self.graph.xmax = len(fuels['Bingo'])-1
+        if flight is not None:
+            if 'Fuels' in self._flights[flight]:
+                fuels = self._flights[flight]['Fuels']
+                
+                self.bingoPlot = libs.garden.graph.SmoothLinePlot(color = [0, 0, 0, 1])
+                self.bingoPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Bingo'])]
+                self.graph.add_plot(self.bingoPlot)
 
+                self.availablePlot = libs.garden.graph.SmoothLinePlot(color = [0, 0.7, 0, 1])
+                self.availablePlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Available'])]
+                self.graph.add_plot(self.availablePlot)
+
+                self.requiredPlot = libs.garden.graph.SmoothLinePlot(color = [0.7, 0, 0, 1])
+                self.requiredPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Required'])]
+                self.graph.add_plot(self.requiredPlot)
+
+                self.graph.xmax = len(fuels['Bingo'])-1
 
 class GUI(App):
-    '''
-    def update(self, flights, missionData, fuels):
-        if len(flights) == 0: return
-        if self.flightButton.text == "Waiting for flights...":
-            self.flightButton.text = "Select"
-
-        self.flightMenu.items = [{"text": item, "viewclass": "OneLineListItem", "on_release": lambda x = item, flights = flights, missionData = missionData, fuels = fuels: self.selectFlight(x, flights, missionData, fuels)} for item in list(flights.keys()) if item in missionData]
-
-        if self.activeFlightName is None or self.activeFlightName not in flights: return
-        activeFlight = flights[self.activeFlightName]
-        if len(activeFlight) == 0 or not activeFlight[0] or len(fuels['Bingo']) == 0: return
-
-        for row in activeFlight:
-            for key in row:
-                row[key] = f"[color=#000000]{row[key]}[/color]" 
-
-        for i, row in enumerate(activeFlight):
-            row['WP'] = f"[color=#000000][b]{str(i)}[/b][/color]" 
-            row['Bingo'] = f"[color=#000000][b]{fuels['Bingo'][i]:0.1f}k[/b][/color]"
-            row['Req.'] = f"[color=#AA0000][b]{fuels['Required'][i]:0.1f}k[/b][/color]"
-            if (fuels['Available'][i] >= fuels['Required'][i]):
-                row['Avail.'] = f"[color=#00AA00][b]{fuels['Available'][i]:0.1f}k[/b][/color]"
-            else:
-                row['Avail.'] = f"[color=#00AA00][s][b]{fuels['Available'][i]:0.1f}k[/b][/s][/color]"
-            
-        self.table.rows = [[f"{row[key]}" for key in headers] for row in activeFlight]
-
-        if self.bingoPlot is not None:
-            self.graph.remove_plot(self.bingoPlot)
-        self.bingoPlot = libs.garden.graph.SmoothLinePlot(color = [0, 0, 0, 1])
-        self.bingoPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Bingo'])]
-        self.graph.add_plot(self.bingoPlot)
-
-        if self.availablePlot is not None:
-            self.graph.remove_plot(self.availablePlot)
-        self.availablePlot = libs.garden.graph.SmoothLinePlot(color = [0, 0.7, 0, 1])
-        self.availablePlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Available'])]
-        self.graph.add_plot(self.availablePlot)
-
-        if self.requiredPlot is not None:
-            self.graph.remove_plot(self.requiredPlot)
-        self.requiredPlot = libs.garden.graph.SmoothLinePlot(color = [0.7, 0, 0, 1])
-        self.requiredPlot.points = [(idx, fuel) for idx, fuel in enumerate(fuels['Required'])]
-        self.graph.add_plot(self.requiredPlot)
-
-        self.graph.xmax = len(fuels['Bingo'])-1
-
-        for acLabel in self.acLabels:
-            self.rootLayout.remove_widget(acLabel)
-
-        self.acLabels.clear()
-
-        for station in range(1, 10):
-            if str(station) in missionData[self.activeFlightName]['Stores']:
-                store = missionData[self.activeFlightName]['Stores'][str(station)]
-            else:
-                store = 'empty'
-            self.acLabels.append(Label(text = f"{station}: {store}", 
-                            size_hint = (None, None),
-                            size = (500, 20),
-                            pos_hint = {'x': 0.04, 'top': 0.75 - (station - 1) * 20 / self.rootLayout.height},
-                            color = [0, 0, 0, 1],
-                            font_size = 14, 
-                            halign = 'left'))
-
-        self.acLabels.append(Label(text = f"Total fuel: {fuels['Available'][0]:.1f}k lbs", 
-                            size_hint = (None, None),
-                            size = (300, 20),
-                            pos_hint = {'x': 0.04, 'y': 0.495},
-                            color = [0, 0, 0, 1],
-                            font_size = 14, 
-                        halign = 'left',
-                        bold = True))
-        
-        self.acLabels.append(Label(text = f"Total weight: {missionData[self.activeFlightName]['Weight'] * 1000:.0f} lbs", 
-                             size_hint = (None, None),
-                             size = (300, 20),
-                             pos_hint = {'x': 0.25, 'y': 0.495},
-                             color = [0, 0, 0, 1],
-                             font_size = 14, 
-                             halign = 'left',
-                             bold = True))
-
-        if 'DragIndex' in missionData[self.activeFlightName]:
-            self.acLabels.append(Label(text = f"Base drag index: {missionData[self.activeFlightName]['DragIndex']:.0f}", 
-                                size_hint = (None, None),
-                                size = (300, 20),
-                                pos_hint = {'x': 0.04, 'y': 0.465},
-                                color = [0, 0, 0, 1],
-                                font_size = 14, 
-                                halign = 'left',
-                                bold = True))
-
-        for acLabel in self.acLabels:
-            acLabel.text_size = acLabel.size
-            self.rootLayout.add_widget(acLabel)
-    '''
     def __init__(self, **kwargs):
         self._initialized = False
         super().__init__(**kwargs)
@@ -313,7 +286,7 @@ class GUI(App):
         self._rootLayout = BoxLayout(orientation = "vertical")
 
         self._actionBar = ActionBar()
-        self._actionView = ActionView(orientation = 'horizontal')
+        self._actionView = ActionView(orientation = "horizontal")
 
         self._actionBar.add_widget(self._actionView)
 

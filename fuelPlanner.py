@@ -39,8 +39,10 @@ class FuelPlanner():
             read = False
             while not read:
                 try:
-                    kmzHash = hashlib.md5(open(self._kmzFilename, 'rb').read()).hexdigest()
-                    cfHash = hashlib.md5(open(self._cfFilename, 'rb').read()).hexdigest()
+                    with open(self._kmzFilename, 'rb') as kmz:
+                        kmzHash = hashlib.md5(kmz.read()).hexdigest()
+                    with open(self._cfFilename, 'rb') as cf:
+                        cfHash = hashlib.md5(cf.read()).hexdigest()
 
                     # The mission file has changed. Update the time of last load
                     if cfHash != self._cfHash:
@@ -70,12 +72,14 @@ class FuelPlanner():
                         self._missionData = self._parseMission()
                         cf.close()
 
-                        for flight in self._missionData:
+                        for flight in list(self._missionData.keys()):
                             if flight in waypoints:
                                 self._missionData[flight]['Waypoints'] = waypoints[flight]
+                            else:
+                                del self._missionData[flight]
 
                         # Set the available flights on the GUI
-                        app.flightSelectionScreen.flights   = self._missionData
+                        app.flightSelectionScreen.flights = self._missionData
                         
                         # Compute the fuel
                         Clock.schedule_once(lambda *args: self._analyzeFlights(), 0.1)
@@ -179,113 +183,117 @@ class FuelPlanner():
                 
     def _computeFuel(self, flight):
         app = App.get_running_app() 
-        if flight in self._missionData:
+        if flight in self._missionData and 'Waypoints' in self._missionData[flight]:
             waypoints = self._missionData[flight]['Waypoints']
-            missionData = self._missionData[flight]
+            if len(waypoints) > 1:
+                missionData = self._missionData[flight]
 
-            coordinates = [(float(row['Latitude']), float(row['Longitude'])) for row in waypoints if row]
-            home = coordinates[-1]
-            distances = [geopy.distance.geodesic(coordinate, home).nm for coordinate in coordinates]
-                                    # Specific fuel consumption on the deck clean
-            legFuels = [(distance / 0.065) / 1000 for distance in distances]
+                coordinates = [(float(row['Latitude']), float(row['Longitude'])) for row in waypoints if row]
+                home = coordinates[-1]
+                distances = [geopy.distance.geodesic(coordinate, home).nm for coordinate in coordinates]
+                                        # Specific fuel consumption on the deck clean
+                legFuels = [(distance / 0.065) / 1000 for distance in distances]
 
-            weight = missionData['Weight'] 
+                weight = missionData['Weight'] 
 
-            bagsCount = 0
-            for store in  missionData['Stores'].values():
-                if "FPU-8A" in store:
-                    bagsCount += 1
-            totalFuel =  missionData['Fuel'] + bagsCount * 330 * 6.71 / 1000.0
+                bagsCount = 0
+                for store in missionData['Stores'].values():
+                    if store is not None and "FPU-8A" in store:
+                        bagsCount += 1
+                totalFuel =  missionData['Fuel'] + bagsCount * 330 * 6.71 / 1000.0
 
-            reserve = 5.5
-            try:
-                reserve = float(app.flightSelectionScreen.flights[flight][3].text)
-            except:
-                app.flightSelectionScreen.flights[flight][3].text = "5.5"
+                reserve = 5.5
+                try:
+                    reserve = float(app.flightSelectionScreen.flights[flight][3].text)
+                except:
+                    app.flightSelectionScreen.flights[flight][3].text = "5.5"
 
-            fuels = {}
-            fuels['Used'] = [0]
-            fuels['Available'] = [totalFuel]
-            fuels['Required'] = []
-            fuels['Bingo'] = [] 
-            baseDragIndex = 0
+                fuels = {}
+                fuels['Used'] = [0]
+                fuels['Available'] = [totalFuel]
+                fuels['Required'] = []
+                fuels['Bingo'] = [] 
+                baseDragIndex = 0
 
-            for legFuel in legFuels:
-                fuels['Bingo'].append( legFuel + reserve)
+                for legFuel in legFuels:
+                    fuels['Bingo'].append( legFuel + reserve)
 
-            for i in range(len(waypoints) - 1):
-                startCoordinates = (float(waypoints[i]['Latitude']), float(waypoints[i]['Longitude']))
-                endCoordinates = (float(waypoints[i + 1]['Latitude']), float(waypoints[i + 1]['Longitude']))
-                legDistance = geopy.distance.geodesic(startCoordinates, endCoordinates).nm
-                altitude = float(waypoints[i + 1]['Altitude'].replace("ft", "").replace( "AGL", "").strip())
-                mach = float(waypoints[i + 1]["Mach"])
+                for i in range(len(waypoints) - 1):
+                    startCoordinates = (float(waypoints[i]['Latitude']), float(waypoints[i]['Longitude']))
+                    endCoordinates = (float(waypoints[i + 1]['Latitude']), float(waypoints[i + 1]['Longitude']))
+                    legDistance = geopy.distance.geodesic(startCoordinates, endCoordinates).nm
+                    altitude = float(waypoints[i + 1]['Altitude'].replace("ft", "").replace( "AGL", "").strip())
+                    mach = float(waypoints[i + 1]["Mach"])
+                    
+                    baseDragIndex, dragIndex = self._computeDragIndex(missionData, altitude, mach)
                 
-                baseDragIndex, dragIndex = self._computeDragIndex(missionData, altitude, mach)
-            
-                # Average initial and final fuel consumption #TODO iteration may be needed
-                SFi = self._interpolateFuelData(altitude, weight * 1000, dragIndex, mach)
-                _weight = weight - legDistance / SFi / 1000
-                SFf = self._interpolateFuelData(altitude, _weight * 1000, dragIndex, mach)
-                SF = (SFi + SFf) / 2
+                    # Average initial and final fuel consumption #TODO iteration may be needed
+                    SFi = self._interpolateFuelData(altitude, weight * 1000, dragIndex, mach)
+                    _weight = weight - legDistance / SFi / 1000
+                    SFf = self._interpolateFuelData(altitude, _weight * 1000, dragIndex, mach)
+                    SF = (SFi + SFf) / 2
 
-                fuelBurn = legDistance / SF / 1000
-                weight = weight - fuelBurn
-                totalFuel = totalFuel - fuelBurn
-                fuels['Used'].append(fuelBurn)
-                fuels['Available'].append(totalFuel)
-            
-            t = list(fuels['Used'])
-            k = []
-            t.reverse()
-            required = reserve
-            k.append(required)
-            for legRequired in t[:-1]:
-                required += legRequired
+                    fuelBurn = legDistance / SF / 1000
+                    weight = weight - fuelBurn
+                    totalFuel = totalFuel - fuelBurn
+                    fuels['Used'].append(fuelBurn)
+                    fuels['Available'].append(totalFuel)
+                
+                t = list(fuels['Used'])
+                k = []
+                t.reverse()
+                required = reserve
                 k.append(required)
+                for legRequired in t[:-1]:
+                    required += legRequired
+                    k.append(required)
 
-            k.reverse()
-            fuels['Required'] = k
+                k.reverse()
+                fuels['Required'] = k
                 
-            return fuels, baseDragIndex
+                return fuels, baseDragIndex
+            else:
+                return None, None
         return None, None
 
     def _computeDragIndex(self, missionData, altitude, mach):
         basicStoreDragIndexs = [0, 0, 0, 0, 0, 0, 0, 0, 0]
         stores = {}
         for station, store in missionData['Stores'].items():
-            store.replace("GBU-38", "Mk-82")
-            store.replace("GBU-32", "Mk-83")
-            store.replace("GBU-35", "Mk-83")
-            store.replace("GBU-31", "Mk-84")
+            if store is not None:
+                store.replace("GBU-38", "Mk-82")
+                store.replace("GBU-32", "Mk-83")
+                store.replace("GBU-35", "Mk-83")
+                store.replace("GBU-31", "Mk-84")
 
-            station = int(station)
-            for tableStore in dragIndexesTable:
-                if tableStore[0][0] in store:
-                    if station not in stores:
-                        stores[station] = [tableStore[0][0]]
-                    else:
-                        stores[station].append(tableStore[0][0])
-                    if len(tableStore[0]) == 1:
-                        storeDragIndex = tableStore[1][0]
-                    else:
-                        modifier = False
-                        for index, tableStation in enumerate(tableStore[0]):
-                            if tableStation == station:
-                                storeDragIndex = tableStore[1][index]
-                                modifier = True
-                        if not modifier:
+                station = int(station)
+                for tableStore in dragIndexesTable:
+                    if tableStore[0][0] in store:
+                        if station not in stores:
+                            stores[station] = [tableStore[0][0]]
+                        else:
+                            stores[station].append(tableStore[0][0])
+                        if len(tableStore[0]) == 1:
                             storeDragIndex = tableStore[1][0]
-                    
-                    storeStringIndex = store.index(tableStore[0][0])
-                    for multiplier in range(1, 10):
-                        if storeStringIndex >+ 5 and f" {multiplier}" in store[storeStringIndex - 5: storeStringIndex]:
-                            storeDragIndex *= multiplier
+                        else:
+                            modifier = False
+                            for index, tableStation in enumerate(tableStore[0]):
+                                if tableStation == station:
+                                    storeDragIndex = tableStore[1][index]
+                                    modifier = True
+                            if not modifier:
+                                storeDragIndex = tableStore[1][0]
+                        
+                        storeStringIndex = store.index(tableStore[0][0])
+                        for multiplier in range(1, 10):
+                            if storeStringIndex >+ 5 and f" {multiplier}" in store[storeStringIndex - 5: storeStringIndex]:
+                                storeDragIndex *= multiplier
 
-                    basicStoreDragIndexs[station - 1] += storeDragIndex
+                        basicStoreDragIndexs[station - 1] += storeDragIndex
 
-            # Pylon
-            if station in [2, 3, 7, 8]:
-                basicStoreDragIndexs[station - 1] += 7.5
+                # Pylon
+                if station in [2, 3, 7, 8]:
+                    basicStoreDragIndexs[station - 1] += 7.5
         
         interferenceCodeNumber = 0
         if 2 in stores and 3 in stores:

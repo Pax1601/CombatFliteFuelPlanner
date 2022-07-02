@@ -5,6 +5,7 @@ from watchdog.events import FileSystemEventHandler
 from fuelPlanner import FuelPlanner
 from GUI import GUI
 from threading import Thread
+from kivy.clock import Clock
 
 class Handler(FileSystemEventHandler):
     def __init__(self, path) -> None:
@@ -15,8 +16,8 @@ class Handler(FileSystemEventHandler):
     def on_any_event(self, event):
         if event.is_directory:
             return None
-        elif event.event_type == 'modified':
-            self.fuelPlanner.readKmz()
+        elif event.event_type == 'modified' and "CombatFlite.kmz" in event.src_path or "Autosave.cf" in event.src_path :
+            Clock.schedule_once(self.fuelPlanner.readKmz, 0.2)
 
 def observerTask():
     #Wait for the GUI to start
